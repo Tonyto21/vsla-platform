@@ -1,10 +1,9 @@
 const { DataTypes } = require('sequelize');
 
 module.exports = (sequelize) => {
-  return sequelize.define('Loan', {
+  return sequelize.define('Contribution', {
     id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
     amount: { type: DataTypes.FLOAT, allowNull: false },
-    status: { type: DataTypes.ENUM('pending','approved','repaid'), defaultValue: 'pending' },
     date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
   });
 };
