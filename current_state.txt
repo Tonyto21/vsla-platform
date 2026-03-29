@@ -1,39 +1,5 @@
-==========================================
-FILE: ./backend/package.json
-==========================================
-{
-  "name": "backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "start": "node src/app.js",
-    "dev": "nodemon src/app.js",
-    "seed": "node seeds/seedData.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "axios": "^1.x.x",
-    "bcryptjs": "^2.x.x",
-    "cors": "^2.x.x",
-    "dotenv": "^16.x.x",
-    "express": "^4.x.x",
-    "jsonwebtoken": "^9.x.x",
-    "multer": "^2.1.1",
-    "sqlite": "^5.x.x",
-    "sqlite3": "^5.x.x"
-  },
-  "devDependencies": {
-    "nodemon": "^3.x.x"
-  }
-}
-
-==========================================
-FILE: ./backend/seeds/createTestUsers.js
-==========================================
+========== BACKEND FILES ==========
+=== FILE: backend/seeds/createTestUsers.js ===
 const bcrypt = require('bcryptjs');
 const { db, initDatabase } = require('../src/models/database');
 
@@ -91,77 +57,19 @@ async function createTestUsers() {
 // Initialize database and create users
 initDatabase();
 setTimeout(() => createTestUsers(), 1000);
-==========================================
-FILE: ./backend/src/app.js
-==========================================
+=== FILE: backend/src/app.js ===
 const express = require('express');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const path = require('path');
-const { initDatabase } = require('./models/database');
-
-dotenv.config();
-
 const app = express();
-const PORT = process.env.PORT || 5000;
+const routes = require('./routes');
 
-// Middleware
-app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use('/api', routes);
 
-// Serve uploaded files
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
-
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  next();
-});
-
-// Initialize database
-initDatabase();
-
-// Routes
-const apiRoutes = require('./routes');
-app.use('/api', apiRoutes);
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    message: 'VSLA Platform API is running'
-  });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Error:', err.stack);
-  res.status(500).json({ 
-    error: 'Something went wrong!',
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
-
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📝 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🔐 Auth endpoints: http://localhost:${PORT}/api/auth`);
+  console.log(`Server running on port ${PORT}`);
 });
-==========================================
-FILE: ./backend/src/controllers/authController.js
-==========================================
+=== FILE: backend/src/controllers/authController.js ===
 const bcrypt = require('bcryptjs');
 const { db } = require('../models/database');
 const { generateToken } = require('../middleware/auth');
@@ -337,143 +245,32 @@ const getCurrentUser = (req, res) => {
 };
 
 module.exports = { register, login, getCurrentUser };
-==========================================
-FILE: ./backend/src/controllers/groupController.js
-==========================================
-const { db } = require('../models/database');
+=== FILE: backend/src/controllers/groupController.js ===
+const { Group } = require('../models');
 
-const createGroup = async (req, res) => {
-  const { name, location, meeting_day } = req.body;
-  const leaderId = req.user.id;
-  
-  if (req.user.role !== 'group_leader' && req.user.role !== 'cbl_admin') {
-    return res.status(403).json({ error: 'Only group leaders can create groups' });
+async function createGroup(req, res) {
+  try {
+    const group = await Group.create(req.body);
+    res.status(201).json(group);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
-  
-  if (!name) {
-    return res.status(400).json({ error: 'Group name is required' });
-  }
-  
-  db.run(
-    `INSERT INTO groups (name, leader_id, location, meeting_day)
-     VALUES (?, ?, ?, ?)`,
-    [name, leaderId, location, meeting_day],
-    function(err) {
-      if (err) {
-        return res.status(400).json({ error: err.message });
-      }
-      
-      const groupId = this.lastID;
-      
-      // Update user's group_id
-      db.run('UPDATE users SET group_id = ? WHERE id = ?', [groupId, leaderId]);
-      
-      // Create wallet for leader
-      db.run('INSERT INTO wallets (user_id, group_id) VALUES (?, ?)', [leaderId, groupId]);
-      
-      res.status(201).json({
-        message: 'Group created successfully',
-        groupId: groupId
-      });
-    }
-  );
-};
+}
 
-const getGroups = (req, res) => {
-  let query = `
-    SELECT g.*, 
-           u.full_name as leader_name,
-           COUNT(DISTINCT m.id) as member_count
-    FROM groups g
-    LEFT JOIN users u ON g.leader_id = u.id
-    LEFT JOIN users m ON m.group_id = g.id
-  `;
-  
-  const params = [];
-  
-  if (req.user.role !== 'cbl_admin') {
-    query += ' WHERE g.id = ?';
-    params.push(req.user.group_id);
-  }
-  
-  query += ' GROUP BY g.id ORDER BY g.created_at DESC';
-  
-  db.all(query, params, (err, groups) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+async function getAllGroups(req, res) {
+  try {
+    const groups = await Group.findAll();
     res.json(groups);
-  });
-};
-
-const getGroupById = (req, res) => {
-  const { id } = req.params;
-  
-  db.get(
-    `SELECT g.*, u.full_name as leader_name
-     FROM groups g
-     LEFT JOIN users u ON g.leader_id = u.id
-     WHERE g.id = ?`,
-    [id],
-    (err, group) => {
-      if (err || !group) {
-        return res.status(404).json({ error: 'Group not found' });
-      }
-      
-      // Get members
-      db.all(
-        `SELECT id, full_name, username, role, gender, phone, created_at
-         FROM users WHERE group_id = ?`,
-        [id],
-        (err, members) => {
-          group.members = members || [];
-          res.json(group);
-        }
-      );
-    }
-  );
-};
-
-const addMember = (req, res) => {
-  const { groupId } = req.params;
-  const { user_id } = req.body;
-  
-  if (!user_id) {
-    return res.status(400).json({ error: 'User ID is required' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  
-  // Check if user exists and is not already in a group
-  db.get('SELECT * FROM users WHERE id = ?', [user_id], (err, user) => {
-    if (err || !user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    if (user.group_id) {
-      return res.status(400).json({ error: 'User already belongs to a group' });
-    }
-    
-    // Add user to group
-    db.run(
-      'UPDATE users SET group_id = ? WHERE id = ?',
-      [groupId, user_id],
-      function(err) {
-        if (err) {
-          return res.status(400).json({ error: err.message });
-        }
-        
-        // Create wallet for user
-        db.run('INSERT INTO wallets (user_id, group_id) VALUES (?, ?)', [user_id, groupId]);
-        
-        res.json({ message: 'Member added successfully' });
-      }
-    );
-  });
-};
+}
 
-module.exports = { createGroup, getGroups, getGroupById, addMember };
-==========================================
-FILE: ./backend/src/controllers/loanController.js
-==========================================
+module.exports = {
+  createGroup,
+  getAllGroups
+};
+=== FILE: backend/src/controllers/loanController.js ===
 const { db } = require('../models/database');
 const exchangeRateService = require('../services/exchangeRateService');
 const { createNotification } = require('../services/notificationService');
@@ -839,9 +636,7 @@ const getLoanById = (req, res) => {
 };
 
 module.exports = { requestLoan, approveLoan, disburseLoan, repayLoan, getLoans, getLoanById };
-==========================================
-FILE: ./backend/src/controllers/notificationController.js
-==========================================
+=== FILE: backend/src/controllers/notificationController.js ===
 const { getNotifications, markAsRead } = require('../services/notificationService');
 
 const getNotificationsController = async (req, res) => {
@@ -908,9 +703,32 @@ module.exports = {
   markAsRead: markAsReadController,
   markAllAsRead: markAllAsReadController
 };
-==========================================
-FILE: ./backend/src/controllers/transactionController.js
-==========================================
+=== FILE: backend/src/controllers/reportController.js ===
+const { User, Contribution, Loan, Group } = require('../models');
+
+async function getUsers(req, res) {
+  try {
+    const users = await User.findAll({ include: [Group, Contribution, Loan] });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+async function getGroups(req, res) {
+  try {
+    const groups = await Group.findAll({ include: User });
+    res.json(groups);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+module.exports = {
+  getUsers,
+  getGroups
+};
+=== FILE: backend/src/controllers/transactionController.js ===
 const { db } = require('../models/database');
 const exchangeRateService = require('../services/exchangeRateService');
 
@@ -1066,9 +884,7 @@ const getWalletBalance = async (req, res) => {
 };
 
 module.exports = { createDeposit, getTransactions, getWalletBalance };
-==========================================
-FILE: ./backend/src/middleware/auth.js
-==========================================
+=== FILE: backend/src/middleware/auth.js ===
 const jwt = require('jsonwebtoken');
 const { db } = require('../models/database');
 
@@ -1158,9 +974,7 @@ module.exports = {
   verifyToken,
   JWT_SECRET
 };
-==========================================
-FILE: ./backend/src/middleware/upload.js
-==========================================
+=== FILE: backend/src/middleware/upload.js ===
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -1203,9 +1017,17 @@ const upload = multer({
 });
 
 module.exports = upload;
-==========================================
-FILE: ./backend/src/models/database.js
-==========================================
+=== FILE: backend/src/models/Contribution.js ===
+const { DataTypes } = require('sequelize');
+
+module.exports = (sequelize) => {
+  return sequelize.define('Contribution', {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    amount: { type: DataTypes.FLOAT, allowNull: false },
+    date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+  });
+};
+=== FILE: backend/src/models/database.js ===
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
@@ -1365,9 +1187,100 @@ const initDatabase = () => {
 };
 
 module.exports = { db, initDatabase };
-==========================================
-FILE: ./backend/src/routes/authRoutes.js
-==========================================
+=== FILE: backend/src/models/Group.js ===
+const { DataTypes } = require('sequelize');
+
+module.exports = (sequelize) => {
+  return sequelize.define('Group', {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    name: { type: DataTypes.STRING, allowNull: false },
+    description: { type: DataTypes.STRING }
+  });
+};
+=== FILE: backend/src/models/index.js ===
+const { Sequelize } = require('sequelize');
+const UserModel = require('./User');
+const GroupModel = require('./Group');
+const ContributionModel = require('./Contribution');
+const LoanModel = require('./Loan');
+
+const sequelize = new Sequelize({
+  dialect: 'sqlite',
+  storage: './database.sqlite', // local DB
+});
+
+const User = UserModel(sequelize);
+const Group = GroupModel(sequelize);
+const Contribution = ContributionModel(sequelize);
+const Loan = LoanModel(sequelize);
+
+// Associations
+User.belongsTo(Group);
+Group.hasMany(User);
+
+Contribution.belongsTo(User);
+User.hasMany(Contribution);
+
+Loan.belongsTo(User);
+User.hasMany(Loan);
+
+sequelize.sync({ force: false })
+  .then(() => console.log('Database initialized successfully'))
+  .catch(err => console.error('Database init error:', err));
+
+module.exports = {
+  sequelize,
+  User,
+  Group,
+  Contribution,
+  Loan
+};
+=== FILE: backend/src/models/Loan.js ===
+const { DataTypes } = require('sequelize');
+
+module.exports = (sequelize) => {
+  return sequelize.define('Loan', {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    amount: { type: DataTypes.FLOAT, allowNull: false },
+    status: { type: DataTypes.ENUM('pending','approved','repaid'), defaultValue: 'pending' },
+    date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+  });
+};
+=== FILE: backend/src/models/Transaction.js ===
+const { DataTypes } = require('sequelize');
+const sequelize = require('../db');
+const User = require('./User');
+
+const Transaction = sequelize.define('Transaction', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
+  type: { type: DataTypes.ENUM('deposit','loan_repayment'), allowNull: false },
+  amount: { type: DataTypes.FLOAT, allowNull: false },
+  currency: { type: DataTypes.STRING, defaultValue: 'USD' },
+  userId: { type: DataTypes.INTEGER, allowNull: false },
+  groupId: { type: DataTypes.INTEGER, allowNull: false },
+}, {
+  tableName: 'transactions',
+  timestamps: true,
+});
+
+Transaction.belongsTo(User, { foreignKey: 'userId' });
+
+module.exports = Transaction;
+=== FILE: backend/src/models/User.js ===
+const { DataTypes } = require('sequelize');
+
+module.exports = (sequelize) => {
+  return sequelize.define('User', {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    name: { type: DataTypes.STRING, allowNull: false },
+    email: { type: DataTypes.STRING, allowNull: false, unique: true }
+  });
+};
+=== FILE: backend/src/routes/authRoutes.js ===
 const express = require('express');
 const router = express.Router();
 const { register, login, getCurrentUser } = require('../controllers/authController');
@@ -1409,71 +1322,178 @@ router.post('/login', login);
 router.get('/me', authenticateToken, getCurrentUser);
 
 module.exports = router;
-==========================================
-FILE: ./backend/src/routes/index.js
-==========================================
+=== FILE: backend/src/routes/index.js ===
 const express = require('express');
 const router = express.Router();
-const { authenticateToken, authorize, checkGroupAccess } = require('../middleware/auth');
+const { getUsers, getGroups } = require('../controllers/reportController');
+const { createGroup, getAllGroups } = require('../controllers/groupController');
 
-// Auth routes
-const authController = require('../controllers/authController');
-router.post('/auth/register', authController.register);
-router.post('/auth/login', authController.login);
-router.get('/auth/me', authenticateToken, authController.getCurrentUser);
+// Users
+router.get('/users', getUsers);
 
-// Group routes
-const groupController = require('../controllers/groupController');
-router.post('/groups', authenticateToken, authorize('group_leader', 'cbl_admin'), groupController.createGroup);
-router.get('/groups', authenticateToken, groupController.getGroups);
-router.get('/groups/:id', authenticateToken, groupController.getGroupById);
-router.post('/groups/:groupId/members', authenticateToken, authorize('group_leader', 'cbl_admin'), groupController.addMember);
-
-// Transaction routes
-const transactionController = require('../controllers/transactionController');
-router.post('/groups/:groupId/deposits', authenticateToken, checkGroupAccess, transactionController.createDeposit);
-router.get('/groups/:groupId/transactions', authenticateToken, checkGroupAccess, transactionController.getTransactions);
-router.get('/groups/:groupId/wallet', authenticateToken, checkGroupAccess, transactionController.getWalletBalance);
-
-// Loan routes
-const loanController = require('../controllers/loanController');
-router.post('/groups/:groupId/loans', authenticateToken, checkGroupAccess, loanController.requestLoan);
-router.put('/loans/:loanId/approve', authenticateToken, authorize('group_leader', 'cbl_admin'), loanController.approveLoan);
-router.put('/loans/:loanId/disburse', authenticateToken, authorize('group_leader', 'cbl_admin'), loanController.disburseLoan);
-router.post('/loans/:loanId/repay', authenticateToken, loanController.repayLoan);
-router.get('/groups/:groupId/loans', authenticateToken, checkGroupAccess, loanController.getLoans);
-router.get('/loans/:loanId', authenticateToken, loanController.getLoanById);
-
-// Notification routes
-const notificationController = require('../controllers/notificationController');
-router.get('/notifications', authenticateToken, notificationController.getNotifications);
-router.put('/notifications/:notificationId/read', authenticateToken, notificationController.markAsRead);
-router.put('/notifications/read-all', authenticateToken, notificationController.markAllAsRead);
-
-// Simple test endpoint
-router.get('/test', (req, res) => {
-  res.json({ message: 'API is working!' });
-});
-
-
-// Debug: List all routes
-router.get('/debug/routes', (req, res) => {
-  const routes = [];
-  router.stack.forEach(layer => {
-    if (layer.route) {
-      routes.push({
-        path: layer.route.path,
-        methods: Object.keys(layer.route.methods)
-      });
-    }
-  });
-  res.json(routes);
-});
+// Groups
+router.get('/groups', getGroups);
+router.post('/groups', createGroup);
+router.get('/all-groups', getAllGroups);
 
 module.exports = router;
-==========================================
-FILE: ./backend/src/services/exchangeRateService.js
-==========================================
+=== FILE: backend/src/seed.js ===
+// backend/src/seed.js
+const { Sequelize } = require('sequelize');
+const bcrypt = require('bcrypt');
+const db = require('./models'); // this should point to your models/index.js
+
+async function seed() {
+  try {
+    console.log('Seeding database...');
+
+    // Drop all tables
+    await db.Loan.drop();
+    await db.Contribution.drop();
+    await db.User.drop();
+    await db.Group.drop();
+
+    // Recreate tables
+    await db.Group.sync({ force: true });
+    await db.User.sync({ force: true });
+    await db.Contribution.sync({ force: true });
+    await db.Loan.sync({ force: true });
+
+    // Create groups
+    const cblGroup = await db.Group.create({
+      name: 'CBL Admin Group',
+      description: 'Admins of the VSLA system'
+    });
+
+    const leaderGroup = await db.Group.create({
+      name: 'Leader Group',
+      description: 'Leaders of VSLA groups'
+    });
+
+    const userGroup = await db.Group.create({
+      name: 'User Group',
+      description: 'Regular members'
+    });
+
+    // Passwords: hashed
+    const saltRounds = 10;
+    const adminPassword = await bcrypt.hash('admin123', saltRounds);
+    const leaderPassword = await bcrypt.hash('leader123', saltRounds);
+    const userPassword = await bcrypt.hash('user123', saltRounds);
+
+    // Create users
+    const admin = await db.User.create({
+      name: 'CBL Admin',
+      email: 'admin@vsla.com',
+      password: adminPassword,
+      GroupId: cblGroup.id
+    });
+
+    const leader = await db.User.create({
+      name: 'Leader User',
+      email: 'leader@vsla.com',
+      password: leaderPassword,
+      GroupId: leaderGroup.id
+    });
+
+    const user = await db.User.create({
+      name: 'Regular User',
+      email: 'user@vsla.com',
+      password: userPassword,
+      GroupId: userGroup.id
+    });
+
+    // Sample contributions
+    await db.Contribution.create({
+      amount: 500,
+      date: new Date(),
+      UserId: leader.id
+    });
+
+    await db.Contribution.create({
+      amount: 200,
+      date: new Date(),
+      UserId: user.id
+    });
+
+    // Sample loans
+    await db.Loan.create({
+      amount: 1000,
+      status: 'pending',
+      date: new Date(),
+      UserId: user.id
+    });
+
+    await db.Loan.create({
+      amount: 500,
+      status: 'approved',
+      date: new Date(),
+      UserId: leader.id
+    });
+
+    console.log('✅ Database seeded successfully!');
+  } catch (err) {
+    console.error('Error seeding database:', err);
+  } finally {
+    await db.sequelize.close();
+  }
+}
+
+seed();
+=== FILE: backend/src/seedUsers.js ===
+const { Group, User } = require('./models');
+
+async function seedUsers() {
+  try {
+    // Create Groups / Roles
+    const adminGroup = await Group.create({ name: 'CBL Admin', description: 'Full system admin' });
+    const leaderGroup = await Group.create({ name: 'Leader', description: 'Group leader' });
+    const userGroup = await Group.create({ name: 'User', description: 'Regular member' });
+
+    // Create Users
+    await User.create({ name: 'CBL Admin', email: 'admin@vsla.com', GroupId: adminGroup.id });
+    await User.create({ name: 'Leader', email: 'leader@vsla.com', GroupId: leaderGroup.id });
+    await User.create({ name: 'User', email: 'user@vsla.com', GroupId: userGroup.id });
+
+    console.log('✅ Users seeded successfully');
+    process.exit();
+  } catch (err) {
+    console.error('Error seeding users:', err);
+    process.exit(1);
+  }
+}
+
+seedUsers();
+=== FILE: backend/src/server.js ===
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const routes = require('./routes');
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Routes
+app.use('/api', routes);
+
+// Health check
+app.get('/', (req, res) => {
+  res.json({ message: 'Backend is running' });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Something went wrong!' });
+});
+
+// Start server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+=== FILE: backend/src/services/exchangeRateService.js ===
 const axios = require('axios');
 const { db } = require('../models/database');
 
@@ -1574,9 +1594,7 @@ class ExchangeRateService {
 }
 
 module.exports = new ExchangeRateService();
-==========================================
-FILE: ./backend/src/services/notificationService.js
-==========================================
+=== FILE: backend/src/services/notificationService.js ===
 const { db } = require('../models/database');
 
 const createNotification = (userId, type, title, message, link) => {
@@ -1629,9 +1647,7 @@ const markAsRead = (notificationId, userId) => {
 };
 
 module.exports = { createNotification, getNotifications, markAsRead };
-==========================================
-FILE: ./backend/test-auth-controller.js
-==========================================
+=== FILE: backend/test-auth-controller.js ===
 const bcrypt = require('bcryptjs');
 const { db, initDatabase } = require('./src/models/database');
 const { register, login } = require('./src/controllers/authController');
@@ -1716,9 +1732,7 @@ async function testAuthController() {
 }
 
 testAuthController();
-==========================================
-FILE: ./backend/test-auth.js
-==========================================
+=== FILE: backend/test-auth.js ===
 const { generateToken, verifyToken, JWT_SECRET } = require('./src/middleware/auth');
 
 console.log('Testing Authentication Middleware...\n');
@@ -1752,9 +1766,7 @@ console.log('Secret used:', JWT_SECRET);
 console.log('Token expires: 24 hours from generation');
 
 console.log('\n✅ Auth middleware test complete!');
-==========================================
-FILE: ./backend/test-db.js
-==========================================
+=== FILE: backend/test-db.js ===
 const { initDatabase, db } = require('./src/models/database');
 
 initDatabase();
@@ -1770,9 +1782,7 @@ setTimeout(() => {
     db.close();
   });
 }, 1000);
-==========================================
-FILE: ./backend/test-exchange.js
-==========================================
+=== FILE: backend/test-exchange.js ===
 const exchangeService = require('./src/services/exchangeRateService');
 
 async function testExchangeRate() {
@@ -1805,9 +1815,7 @@ async function testExchangeRate() {
 }
 
 testExchangeRate();
-==========================================
-FILE: ./backend/transactionController.js
-==========================================
+=== FILE: backend/transactionController.js ===
 const { db } = require('../models/database');
 const exchangeRateService = require('../services/exchangeRateService');
 
@@ -1963,162 +1971,9 @@ const getWalletBalance = async (req, res) => {
 };
 
 module.exports = { createDeposit, getTransactions, getWalletBalance };
-==========================================
-FILE: ./frontend/.gitignore
-==========================================
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-==========================================
-FILE: ./frontend/README.md
-==========================================
-# React + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
-
-==========================================
-FILE: ./frontend/eslint.config.js
-==========================================
-import js from '@eslint/js'
-import globals from 'globals'
-import reactHooks from 'eslint-plugin-react-hooks'
-import reactRefresh from 'eslint-plugin-react-refresh'
-import { defineConfig, globalIgnores } from 'eslint/config'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{js,jsx}'],
-    extends: [
-      js.configs.recommended,
-      reactHooks.configs.flat.recommended,
-      reactRefresh.configs.vite,
-    ],
-    languageOptions: {
-      ecmaVersion: 2020,
-      globals: globals.browser,
-      parserOptions: {
-        ecmaVersion: 'latest',
-        ecmaFeatures: { jsx: true },
-        sourceType: 'module',
-      },
-    },
-    rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
-    },
-  },
-])
-
-==========================================
-FILE: ./frontend/index.html
-==========================================
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
-
-==========================================
-FILE: ./frontend/package.json
-==========================================
-{
-  "name": "frontend",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@fontsource/inter": "^5.2.8",
-    "axios": "^1.13.6",
-    "chart.js": "^4.5.1",
-    "date-fns": "^4.1.0",
-    "framer-motion": "^12.38.0",
-    "lucide-react": "^1.7.0",
-    "react": "^19.2.4",
-    "react-chartjs-2": "^5.3.1",
-    "react-countup": "^6.5.3",
-    "react-dom": "^19.2.4",
-    "react-hot-toast": "^2.6.0",
-    "react-router-dom": "^7.13.2",
-    "react-select": "^5.10.2"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.39.4",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "autoprefixer": "^10.4.16",
-    "eslint": "^9.39.4",
-    "eslint-plugin-react-hooks": "^7.0.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.4.0",
-    "postcss": "^8.4.31",
-    "tailwindcss": "^3.4.1",
-    "vite": "^8.0.1"
-  }
-}
-
-==========================================
-FILE: ./frontend/postcss.config.js
-==========================================
-export default {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
-}
-
-==========================================
-FILE: ./frontend/src/App.css
-==========================================
+========== FRONTEND FILES ==========
+=== FILE: frontend/src/App.css ===
 .counter {
   font-size: 16px;
   padding: 5px 10px;
@@ -2304,9 +2159,7 @@ FILE: ./frontend/src/App.css
   }
 }
 
-==========================================
-FILE: ./frontend/src/App.jsx
-==========================================
+=== FILE: frontend/src/App.jsx ===
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
@@ -2349,165 +2202,7 @@ function App() {
 
 export default App;
 
-==========================================
-FILE: ./frontend/src/TestPage.jsx
-==========================================
-import React from 'react';
-
-export default function TestPage() {
-  return (
-    <div style={{ 
-      minHeight: '100vh', 
-      background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)',
-      padding: '2rem'
-    }}>
-      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-        <div style={{
-          background: 'rgba(255,255,255,0.1)',
-          backdropFilter: 'blur(12px)',
-          borderRadius: '1rem',
-          padding: '2rem',
-          border: '1px solid rgba(255,255,255,0.2)'
-        }}>
-          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', color: 'white', marginBottom: '1rem' }}>
-            VSLA Platform - Test Page ✅
-          </h1>
-          <p style={{ color: '#cbd5e1', marginBottom: '2rem' }}>
-            If you can see this with a purple gradient background and glass card, CSS is working!
-          </p>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
-            <div style={{ background: 'rgba(99,102,241,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>12</div>
-              <div style={{ color: '#cbd5e1', fontSize: '0.875rem' }}>Groups</div>
-            </div>
-            <div style={{ background: 'rgba(16,185,129,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>156</div>
-              <div style={{ color: '#cbd5e1', fontSize: '0.875rem' }}>Members</div>
-            </div>
-            <div style={{ background: 'rgba(139,92,246,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>$45K</div>
-              <div style={{ color: '#cbd5e1', fontSize: '0.875rem' }}>Savings</div>
-            </div>
-            <div style={{ background: 'rgba(245,158,11,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>94%</div>
-              <div style={{ color: '#cbd5e1', fontSize: '0.875rem' }}>Repayment</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-==========================================
-FILE: ./frontend/src/components/Layout.jsx
-==========================================
-import React, { useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { Home, Users, Wallet, Landmark, FileText, Bell, LogOut, Menu, X, UserCircle } from 'lucide-react';
-
-const Layout = ({ children }) => {
-  const { user, logout } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const navigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: Home },
-    { name: 'Groups', href: '/groups', icon: Users },
-    { name: 'Transactions', href: '/transactions', icon: Wallet },
-    { name: 'Loans', href: '/loans', icon: Landmark },
-    { name: 'Reports', href: '/reports', icon: FileText },
-  ];
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-20 bg-black/50 lg:hidden" onClick={() => setSidebarOpen(false)} />
-      )}
-
-      <div className={`fixed inset-y-0 left-0 z-30 w-64 bg-black/50 backdrop-blur-xl border-r border-white/10 transform transition-transform duration-300 lg:translate-x-0 ${
-        sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-      }`}>
-        <div className="flex items-center justify-between h-16 px-4 border-b border-white/10">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold">V</span>
-            </div>
-            <span className="text-white font-bold text-xl">VSLA</span>
-          </div>
-          <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-gray-400">
-            <X className="h-6 w-6" />
-          </button>
-        </div>
-
-        <nav className="mt-8 px-4">
-          {navigation.map((item) => {
-            const isActive = location.pathname === item.href;
-            return (
-              <Link
-                key={item.name}
-                to={item.href}
-                className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all mb-1 ${
-                  isActive ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <item.icon className="h-5 w-5" />
-                <span className="font-medium">{item.name}</span>
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="absolute bottom-0 w-full p-4 border-t border-white/10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center">
-              <span className="text-white font-bold">{user?.full_name?.charAt(0) || 'U'}</span>
-            </div>
-            <div className="flex-1">
-              <p className="text-white text-sm font-medium">{user?.full_name}</p>
-              <p className="text-gray-400 text-xs">{user?.username}</p>
-            </div>
-            <button onClick={handleLogout} className="text-gray-400 hover:text-white">
-              <LogOut className="h-5 w-5" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="lg:pl-64">
-        <div className="sticky top-0 z-10 bg-black/30 backdrop-blur-xl border-b border-white/10">
-          <div className="flex items-center justify-between h-16 px-6">
-            <button onClick={() => setSidebarOpen(true)} className="lg:hidden text-gray-400">
-              <Menu className="h-6 w-6" />
-            </button>
-            <div className="flex items-center gap-4">
-              <Link to="/notifications" className="text-gray-400 hover:text-white">
-                <Bell className="h-5 w-5" />
-              </Link>
-              <Link to="/profile" className="flex items-center gap-2 text-gray-300 hover:text-white">
-                <UserCircle className="h-5 w-5" />
-                <span className="hidden md:inline text-sm">Profile</span>
-              </Link>
-            </div>
-          </div>
-        </div>
-        <main className="p-6">{children}</main>
-      </div>
-    </div>
-  );
-};
-
-export default Layout;
-==========================================
-FILE: ./frontend/src/components/Layout/DashboardLayout.jsx
-==========================================
+=== FILE: frontend/src/components/Layout/DashboardLayout.jsx ===
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -2613,9 +2308,121 @@ const DashboardLayout = ({ children, fullName, username }) => {
 
 export default DashboardLayout;
 
-==========================================
-FILE: ./frontend/src/components/Logo.jsx
-==========================================
+=== FILE: frontend/src/components/Layout.jsx ===
+import React, { useState } from 'react';
+import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { Home, Users, Wallet, Landmark, FileText, Bell, LogOut, Menu, X, UserCircle } from 'lucide-react';
+
+const Layout = () => {
+  const { user, logout } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const navigation = [
+    { name: 'Dashboard', href: '/dashboard', icon: Home },
+    { name: 'Groups', href: '/groups', icon: Users },
+    { name: 'Transactions', href: '/transactions', icon: Wallet },
+    { name: 'Loans', href: '/loans', icon: Landmark },
+    { name: 'Reports', href: '/reports', icon: FileText },
+  ];
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
+      
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-20 bg-black/50 lg:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
+
+      {/* Sidebar */}
+      <div className={`fixed inset-y-0 left-0 z-30 w-64 bg-black/50 backdrop-blur-xl border-r border-white/10 transform transition-transform duration-300 lg:translate-x-0 ${
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}>
+        
+        <div className="flex items-center justify-between h-16 px-4 border-b border-white/10">
+          <span className="text-white font-bold text-xl">VSLA</span>
+          <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-gray-400">
+            <X className="h-6 w-6" />
+          </button>
+        </div>
+
+        <nav className="mt-8 px-4">
+          {navigation.map((item) => (
+            <Link
+              key={item.name}
+              to={item.href}
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition mb-1 ${
+                location.pathname === item.href
+                  ? 'bg-white/10 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              <item.icon className="h-5 w-5" />
+              {item.name}
+            </Link>
+          ))}
+        </nav>
+
+        {/* User */}
+        <div className="absolute bottom-0 w-full p-4 border-t border-white/10">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center">
+              <span className="text-white font-bold">
+                {user?.full_name?.charAt(0) || 'U'}
+              </span>
+            </div>
+            <div className="flex-1">
+              <p className="text-white text-sm">{user?.full_name}</p>
+              <p className="text-gray-400 text-xs">{user?.username}</p>
+            </div>
+            <button onClick={handleLogout} className="text-gray-400 hover:text-white">
+              <LogOut className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div className="lg:pl-64">
+        
+        {/* Top bar */}
+        <div className="sticky top-0 z-10 bg-black/30 backdrop-blur-xl border-b border-white/10">
+          <div className="flex items-center justify-between h-16 px-6">
+            <button onClick={() => setSidebarOpen(true)} className="lg:hidden text-gray-400">
+              <Menu className="h-6 w-6" />
+            </button>
+
+            <div className="flex items-center gap-4">
+              <Link to="/notifications" className="text-gray-400 hover:text-white">
+                <Bell className="h-5 w-5" />
+              </Link>
+              <Link to="/profile" className="flex items-center gap-2 text-gray-300 hover:text-white">
+                <UserCircle className="h-5 w-5" />
+                <span className="hidden md:inline text-sm">Profile</span>
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* THIS is the fix */}
+        <main className="p-6">
+          <Outlet />
+        </main>
+
+      </div>
+    </div>
+  );
+};
+
+export default Layout;
+=== FILE: frontend/src/components/Logo.jsx ===
 import React from 'react';
 
 const Logo = ({ size = 'md', showText = true }) => {
@@ -2655,9 +2462,7 @@ const Logo = ({ size = 'md', showText = true }) => {
 };
 
 export default Logo;
-==========================================
-FILE: ./frontend/src/components/PrivateRoute.jsx
-==========================================
+=== FILE: frontend/src/components/PrivateRoute.jsx ===
 import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -2667,23 +2472,19 @@ const PrivateRoute = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      <div className="flex items-center justify-center h-screen">
+        <div className="w-12 h-12 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
       </div>
     );
   }
 
-  return isAuthenticated ? <Outlet /> : <Navigate to="/login" />;
+  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;
 };
 
 export default PrivateRoute;
-==========================================
-FILE: ./frontend/src/components/RegisterForm.jsx
-==========================================
+=== FILE: frontend/src/components/RegisterForm.jsx ===
 
-==========================================
-FILE: ./frontend/src/contexts/AuthContext.jsx
-==========================================
+=== FILE: frontend/src/contexts/AuthContext.jsx ===
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -2779,9 +2580,7 @@ export const AuthProvider = ({ children }) => {
     </AuthContext.Provider>
   );
 };
-==========================================
-FILE: ./frontend/src/index.css
-==========================================
+=== FILE: frontend/src/index.css ===
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -2808,14 +2607,6 @@ FILE: ./frontend/src/index.css
 @layer components {
   .glass-card {
     @apply bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl shadow-xl;
-  }
-  
-  .glass-card-hover {
-    @apply transition-all duration-300;
-  }
-  
-  .glass-card-hover:hover {
-    @apply bg-white/15 border-white/30 shadow-2xl;
   }
   
   .stat-card {
@@ -2847,13 +2638,10 @@ FILE: ./frontend/src/index.css
   to { transform: rotate(360deg); }
 }
 
-.animate-spin-custom {
+.animate-spin {
   animation: spin 1s linear infinite;
 }
-
-==========================================
-FILE: ./frontend/src/main.jsx
-==========================================
+=== FILE: frontend/src/main.jsx ===
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
@@ -2865,166 +2653,101 @@ createRoot(document.getElementById('root')).render(
   </StrictMode>,
 )
 
-==========================================
-FILE: ./frontend/src/pages/Dashboard.jsx
-==========================================
-import React, { useState, useEffect, useRef } from 'react';
+=== FILE: frontend/src/pages/Dashboard.jsx ===
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Users, Wallet, TrendingUp, ArrowUpRight, ArrowDownRight,
-  Plus, Eye, Download, RefreshCw, CheckCircle, Activity,
-  PieChart as PieIcon, Zap, Shield, Globe, ChevronRight,
-  DollarSign, BarChart2, Clock, Bell, Star
+  Users, Wallet, TrendingUp, ArrowUpRight, Plus, Eye,
+  Download, RefreshCw, CheckCircle, Activity, PieChart as PieIcon,
+  Globe, DollarSign
 } from 'lucide-react';
 import { format, formatDistanceToNow } from 'date-fns';
 import {
   Chart as ChartJS,
-  CategoryScale, LinearScale, BarElement, LineElement,
-  PointElement, Title, Tooltip, Legend, ArcElement, Filler
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  ArcElement,
+  PointElement,
+  LineElement,
+  Filler
 } from 'chart.js';
-import { Bar, Line, Doughnut } from 'react-chartjs-2';
+import { Bar, Doughnut, Line } from 'react-chartjs-2';
 
+// Register ChartJS components
 ChartJS.register(
-  CategoryScale, LinearScale, BarElement, LineElement,
-  PointElement, Title, Tooltip, Legend, ArcElement, Filler
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  ArcElement,
+  PointElement,
+  LineElement,
+  Filler
 );
 
-// Animated counter hook
-const useCountUp = (end, duration = 1500, started = false) => {
-  const [count, setCount] = useState(0);
-  useEffect(() => {
-    if (!started || !end) return;
-    let startTime = null;
-    const startVal = 0;
-    const step = (timestamp) => {
-      if (!startTime) startTime = timestamp;
-      const progress = Math.min((timestamp - startTime) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setCount(Math.floor(eased * (end - startVal) + startVal));
-      if (progress < 1) requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }, [end, started, duration]);
-  return count;
-};
-
-// Stat Card with animated counter
-const StatCard = ({ title, value, rawValue, change, positive, icon: Icon, color, delay = 0 }) => {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setVisible(true), delay);
-    return () => clearTimeout(t);
-  }, [delay]);
-  const count = useCountUp(rawValue || 0, 1200, visible);
-
-  return (
-    <div
-      className="relative overflow-hidden rounded-2xl border border-white/10 p-5 transition-all duration-300 hover:-translate-y-1 hover:border-white/20 hover:shadow-2xl"
-      style={{ background: 'rgba(255,255,255,0.03)' }}
-    >
-      {/* Glow */}
-      <div className="absolute -top-8 -right-8 w-24 h-24 rounded-full opacity-20 blur-2xl" style={{ background: color }} />
-
-      <div className="flex items-start justify-between relative z-10">
-        <div className="flex-1">
-          <p className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">{title}</p>
-          <p className="text-3xl font-bold text-white">
-            {value.startsWith('$') ? `$${count.toLocaleString()}` :
-             value.endsWith('%') ? `${count}%` :
-             count.toLocaleString()}
-          </p>
-          <div className={`flex items-center gap-1 mt-2 text-xs font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
-            {positive ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-            <span>{change} from last month</span>
-          </div>
-        </div>
-        <div className="p-3 rounded-xl flex-shrink-0" style={{ background: `${color}20` }}>
-          <Icon size={20} color={color} />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Role badge
-const RoleBadge = ({ role }) => {
-  const badges = {
-    cbl_admin: { label: 'CBL Admin', color: 'text-purple-300 bg-purple-500/20 border-purple-500/30' },
-    group_leader: { label: 'Group Leader', color: 'text-blue-300 bg-blue-500/20 border-blue-500/30' },
-    member: { label: 'Member', color: 'text-emerald-300 bg-emerald-500/20 border-emerald-500/30' },
-  };
-  const b = badges[role] || badges.member;
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${b.color}`}>
-      <Star size={10} />
-      {b.label}
-    </span>
-  );
-};
-
 const Dashboard = () => {
-  const { user, isCBLAdmin, isGroupLeader } = useAuth();
+  const { user, isCBLAdmin } = useAuth();
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState('week');
-  const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState('overview');
 
-  const fetchData = async (silent = false) => {
-    if (!silent) setLoading(true);
-    else setRefreshing(true);
-    try {
-      if (isCBLAdmin) {
-        const res = await axios.get('http://localhost:5000/api/reports/dashboard');
-        setDashboardData(res.data);
-      } else {
-        const groupsRes = await axios.get('http://localhost:5000/api/groups');
-        if (groupsRes.data.length > 0) {
-          const group = groupsRes.data[0];
-          const [walletRes, txRes] = await Promise.all([
-            axios.get(`http://localhost:5000/api/groups/${group.id}/wallet`),
-            axios.get(`http://localhost:5000/api/groups/${group.id}/transactions?limit=10`)
-          ]);
-          setDashboardData({
-            wallet: walletRes.data,
-            transactions: txRes.data,
-            group,
-            total_groups: groupsRes.data.length,
-            total_users: group.member_count || 0,
-            total_savings: { total_usd: walletRes.data?.balance || 0 },
-            repayment_rate: 94,
-            recent_transactions: txRes.data || [],
-          });
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        if (isCBLAdmin) {
+          const res = await axios.get('http://localhost:5000/api/reports/dashboard');
+          setDashboardData(res.data);
+        } else {
+          const groupsRes = await axios.get('http://localhost:5000/api/groups');
+          if (groupsRes.data.length > 0) {
+            const group = groupsRes.data[0];
+            const [walletRes, txRes] = await Promise.all([
+              axios.get(`http://localhost:5000/api/groups/${group.id}/wallet`),
+              axios.get(`http://localhost:5000/api/groups/${group.id}/transactions?limit=10`)
+            ]);
+            setDashboardData({
+              wallet: walletRes.data,
+              transactions: txRes.data,
+              group: group,
+              total_groups: groupsRes.data.length,
+              total_users: group.member_count || 0,
+              total_savings: { total_usd: walletRes.data?.total_usd || 0 },
+              repayment_rate: 94,
+              recent_transactions: txRes.data || [],
+            });
+          }
         }
+      } catch (err) {
+        console.error('Dashboard fetch error:', err);
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      console.error('Dashboard fetch error:', err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+    };
+    fetchData();
+  }, [isCBLAdmin]);
 
-  useEffect(() => { fetchData(); }, [isCBLAdmin]);
-
-  // Chart data
+  // Sample chart data
   const weeklyData = {
     labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     datasets: [
       {
-        label: 'Deposits',
+        label: 'Deposits ($)',
         data: [2450, 3800, 5200, 4100, 6800, 2900, 1800],
-        backgroundColor: 'rgba(99,102,241,0.8)',
-        borderRadius: 6,
-        borderSkipped: false,
+        backgroundColor: 'rgba(99, 102, 241, 0.8)',
+        borderRadius: 8,
       },
       {
-        label: 'Loan Repayments',
+        label: 'Loans ($)',
         data: [1200, 2100, 1800, 2900, 4200, 1500, 800],
-        backgroundColor: 'rgba(16,185,129,0.8)',
-        borderRadius: 6,
-        borderSkipped: false,
+        backgroundColor: 'rgba(16, 185, 129, 0.8)',
+        borderRadius: 8,
       },
     ],
   };
@@ -3033,18 +2756,16 @@ const Dashboard = () => {
     labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
     datasets: [
       {
-        label: 'Deposits',
+        label: 'Deposits ($)',
         data: [18500, 22400, 26800, 31200, 29800, 34500],
-        backgroundColor: 'rgba(99,102,241,0.8)',
-        borderRadius: 6,
-        borderSkipped: false,
+        backgroundColor: 'rgba(99, 102, 241, 0.8)',
+        borderRadius: 8,
       },
       {
-        label: 'Loan Repayments',
+        label: 'Loans ($)',
         data: [9200, 11800, 14500, 17800, 16200, 19800],
-        backgroundColor: 'rgba(16,185,129,0.8)',
-        borderRadius: 6,
-        borderSkipped: false,
+        backgroundColor: 'rgba(16, 185, 129, 0.8)',
+        borderRadius: 8,
       },
     ],
   };
@@ -3056,12 +2777,11 @@ const Dashboard = () => {
         label: 'Total Savings',
         data: [32000, 38000, 41000, 45000, 43000, 49000, 54000],
         borderColor: '#6366f1',
-        backgroundColor: 'rgba(99,102,241,0.1)',
+        backgroundColor: 'rgba(99, 102, 241, 0.1)',
         tension: 0.4,
         fill: true,
         pointBackgroundColor: '#6366f1',
         pointRadius: 4,
-        pointHoverRadius: 6,
       },
     ],
   };
@@ -3076,346 +2796,297 @@ const Dashboard = () => {
       ],
       backgroundColor: ['#f59e0b', '#10b981', '#ef4444'],
       borderWidth: 0,
-      hoverOffset: 8,
     }],
   };
 
-  const chartBase = {
+  const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: { labels: { color: '#9ca3af', font: { size: 12 }, boxWidth: 12 } },
+      legend: {
+        labels: { color: '#9ca3af', font: { size: 12 } }
+      },
       tooltip: {
-        backgroundColor: '#111827',
+        backgroundColor: '#1f2937',
         titleColor: '#fff',
         bodyColor: '#9ca3af',
-        borderColor: 'rgba(255,255,255,0.1)',
+        borderColor: '#374151',
         borderWidth: 1,
-        padding: 12,
-        cornerRadius: 8,
-      },
+      }
     },
-  };
-
-  const barOptions = {
-    ...chartBase,
     scales: {
-      y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#6b7280', font: { size: 11 } } },
-      x: { grid: { display: false }, ticks: { color: '#6b7280', font: { size: 11 } } },
-    },
+      y: {
+        grid: { color: '#374151' },
+        ticks: { color: '#9ca3af' }
+      },
+      x: {
+        grid: { display: false },
+        ticks: { color: '#9ca3af' }
+      }
+    }
   };
 
   const lineOptions = {
-    ...chartBase,
-    scales: {
-      y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#6b7280', font: { size: 11 }, callback: v => `$${(v/1000).toFixed(0)}k` } },
-      x: { grid: { display: false }, ticks: { color: '#6b7280', font: { size: 11 } } },
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { labels: { color: '#9ca3af' } },
+      tooltip: {
+        backgroundColor: '#1f2937',
+        titleColor: '#fff',
+        bodyColor: '#9ca3af',
+      }
     },
+    scales: {
+      y: {
+        grid: { color: '#374151' },
+        ticks: { color: '#9ca3af', callback: (v) => `$${(v/1000).toFixed(0)}k` }
+      },
+      x: {
+        grid: { display: false },
+        ticks: { color: '#9ca3af' }
+      }
+    }
   };
 
   const doughnutOptions = {
-    ...chartBase,
-    cutout: '72%',
+    responsive: true,
+    maintainAspectRatio: false,
     plugins: {
-      ...chartBase.plugins,
-      legend: { position: 'bottom', labels: { color: '#9ca3af', font: { size: 12 }, padding: 16, boxWidth: 10 } },
+      legend: {
+        position: 'bottom',
+        labels: { color: '#9ca3af', font: { size: 12 } }
+      },
+      tooltip: {
+        backgroundColor: '#1f2937',
+        titleColor: '#fff',
+        bodyColor: '#9ca3af',
+      }
     },
+    cutout: '70%',
   };
 
   const savings = dashboardData?.total_savings?.total_usd || 45230;
   const stats = [
-    { title: 'Total Groups', value: String(dashboardData?.total_groups || 12), rawValue: dashboardData?.total_groups || 12, change: '+2', positive: true, icon: Globe, color: '#6366f1', delay: 0 },
-    { title: 'Active Members', value: String(dashboardData?.total_users || 156), rawValue: dashboardData?.total_users || 156, change: '+8', positive: true, icon: Users, color: '#10b981', delay: 100 },
-    { title: 'Total Savings', value: `$${savings}`, rawValue: savings, change: '+12.5%', positive: true, icon: DollarSign, color: '#8b5cf6', delay: 200 },
-    { title: 'Repayment Rate', value: `${dashboardData?.repayment_rate?.toFixed(0) || 94}%`, rawValue: dashboardData?.repayment_rate || 94, change: '+5%', positive: true, icon: TrendingUp, color: '#f59e0b', delay: 300 },
+    { title: 'Total Groups', value: String(dashboardData?.total_groups || 12), change: '+2', icon: Globe, color: '#6366f1' },
+    { title: 'Active Members', value: String(dashboardData?.total_users || 156), change: '+8', icon: Users, color: '#10b981' },
+    { title: 'Total Savings', value: `$${savings.toLocaleString()}`, change: '+12.5%', icon: DollarSign, color: '#8b5cf6' },
+    { title: 'Repayment Rate', value: `${dashboardData?.repayment_rate?.toFixed(0) || 94}%`, change: '+5%', icon: TrendingUp, color: '#f59e0b' },
   ];
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="flex flex-col items-center gap-4">
-          <div className="relative w-16 h-16">
-            <div className="absolute inset-0 rounded-full border-4 border-indigo-500/20"></div>
-            <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-indigo-500 animate-spin"></div>
-          </div>
-          <p className="text-gray-400 text-sm">Loading dashboard...</p>
-        </div>
+      <div className="flex items-center justify-center h-96">
+        <div className="w-12 h-12 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
       </div>
     );
   }
 
-  const txCount = dashboardData?.recent_transactions?.length || 0;
-
   return (
-    <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
-
-      {/* ── Top bar ── */}
-      <div className="flex flex-wrap gap-4 items-center justify-between">
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
         <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-            <RoleBadge role={user?.role} />
-          </div>
-          <p className="text-gray-500 text-sm">{format(new Date(), "EEEE, MMMM do yyyy · h:mm a")}</p>
+          <h1 className="text-3xl font-bold text-white">Dashboard</h1>
+          <p className="text-gray-400 mt-1">{format(new Date(), 'EEEE, MMMM do, yyyy')}</p>
         </div>
+        <div className="flex gap-2 bg-white/5 rounded-xl p-1">
+          {['week', 'month'].map((range) => (
+            <button
+              key={range}
+              onClick={() => setTimeRange(range)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                timeRange === range ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              {range.charAt(0).toUpperCase() + range.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
 
-        <div className="flex items-center gap-3">
-          {/* Refresh */}
-          <button
-            onClick={() => fetchData(true)}
-            disabled={refreshing}
-            className="p-2.5 rounded-xl border border-white/10 text-gray-400 hover:text-white hover:border-white/20 hover:bg-white/5 transition-all"
-          >
-            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
+      {/* Hero Section */}
+      <div className="rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 p-8">
+        <h2 className="text-2xl font-bold text-white mb-2">
+          Welcome back, {user?.full_name?.split(' ')[0] || 'User'}! 👋
+        </h2>
+        <p className="text-indigo-100 mb-6">
+          Your VSLA community is thriving. Track savings, manage loans, and empower your members.
+        </p>
+        <div className="flex gap-4">
+          <button className="bg-white text-indigo-700 px-5 py-2 rounded-xl font-semibold flex items-center gap-2">
+            <Plus size={18} /> Make a deposit
           </button>
-          {/* Time range toggle */}
-          <div className="flex bg-white/5 border border-white/10 rounded-xl p-1">
-            {['week', 'month'].map(r => (
-              <button
-                key={r}
-                onClick={() => setTimeRange(r)}
-                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${timeRange === r ? 'bg-indigo-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
-              >
-                {r.charAt(0).toUpperCase() + r.slice(1)}
-              </button>
-            ))}
-          </div>
+          <button className="border border-white/30 text-white px-5 py-2 rounded-xl font-semibold flex items-center gap-2">
+            <Eye size={18} /> View reports
+          </button>
         </div>
       </div>
 
-      {/* ── Hero banner ── */}
-      <div className="relative overflow-hidden rounded-2xl p-7"
-        style={{ background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #db2777 100%)' }}>
-        {/* Decorative orbs */}
-        <div className="absolute -top-12 -right-12 w-48 h-48 bg-white/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-0 left-1/3 w-32 h-32 bg-white/10 rounded-full blur-2xl" />
-
-        <div className="relative z-10 flex flex-wrap items-center justify-between gap-6">
-          <div className="flex-1 min-w-0">
-            <h2 className="text-2xl font-bold text-white mb-1">
-              Welcome back, {user?.full_name?.split(' ')[0] || 'User'}! 👋
-            </h2>
-            <p className="text-indigo-100/80 text-sm mb-5 max-w-lg">
-              Your VSLA community is thriving. Track savings, manage loans, and empower your members in real time.
-            </p>
-            <div className="flex flex-wrap gap-3">
-              <button className="flex items-center gap-2 bg-white text-indigo-700 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-indigo-50 transition-all shadow">
-                <Plus size={15} /> Make a Deposit
-              </button>
-              <button className="flex items-center gap-2 border border-white/30 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-white/10 transition-all">
-                <Eye size={15} /> View Reports
-              </button>
-            </div>
-          </div>
-
-          {/* Mini stats in hero */}
-          <div className="flex gap-4 flex-shrink-0">
-            {[
-              { label: 'This Week', value: '+$4.2K', sub: 'in deposits' },
-              { label: 'Active Loans', value: '24', sub: 'outstanding' },
-              { label: 'Health Score', value: '98%', sub: 'portfolio' },
-            ].map((s, i) => (
-              <div key={i} className="bg-white/10 backdrop-blur rounded-xl px-4 py-3 text-center border border-white/20 min-w-[90px]">
-                <div className="text-white/60 text-xs mb-1">{s.label}</div>
-                <div className="text-white font-bold text-lg">{s.value}</div>
-                <div className="text-white/50 text-xs">{s.sub}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Stat cards ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((s, i) => <StatCard key={i} {...s} />)}
-      </div>
-
-      {/* ── Charts row ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Bar chart — 2/3 width */}
-        <div className="lg:col-span-2 rounded-2xl border border-white/10 p-5" style={{ background: 'rgba(255,255,255,0.03)' }}>
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h3 className="text-white font-semibold">Financial Activity</h3>
-              <p className="text-gray-500 text-xs mt-0.5">Deposits vs Loan Repayments · {timeRange === 'week' ? 'This Week' : 'This Month'}</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <BarChart2 size={16} className="text-gray-500" />
-            </div>
-          </div>
-          <div style={{ height: 260 }}>
-            <Bar data={timeRange === 'week' ? weeklyData : monthlyData} options={barOptions} />
-          </div>
-        </div>
-
-        {/* Doughnut chart — 1/3 width */}
-        <div className="rounded-2xl border border-white/10 p-5" style={{ background: 'rgba(255,255,255,0.03)' }}>
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h3 className="text-white font-semibold">Loan Portfolio</h3>
-              <p className="text-gray-500 text-xs mt-0.5">Status breakdown</p>
-            </div>
-            <PieIcon size={16} className="text-gray-500" />
-          </div>
-          <div style={{ height: 180 }}>
-            <Doughnut data={doughnutData} options={doughnutOptions} />
-          </div>
-          {/* Center label */}
-          <div className="grid grid-cols-3 gap-2 mt-4">
-            {[
-              { label: 'Active', value: doughnutData.datasets[0].data[0], color: '#f59e0b' },
-              { label: 'Repaid', value: doughnutData.datasets[0].data[1], color: '#10b981' },
-              { label: 'Defaulted', value: doughnutData.datasets[0].data[2], color: '#ef4444' },
-            ].map((item, i) => (
-              <div key={i} className="text-center">
-                <div className="text-lg font-bold text-white">{item.value}</div>
-                <div className="flex items-center justify-center gap-1 mt-0.5">
-                  <div className="w-2 h-2 rounded-full" style={{ background: item.color }} />
-                  <span className="text-xs text-gray-500">{item.label}</span>
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+        {stats.map((stat, i) => (
+          <div key={i} className="bg-gradient-to-br from-indigo-500/20 to-purple-600/20 rounded-xl p-5 border border-white/10 hover:border-white/20 transition">
+            <div className="flex justify-between">
+              <div>
+                <p className="text-gray-400 text-sm">{stat.title}</p>
+                <p className="text-2xl font-bold text-white mt-1">{stat.value}</p>
+                <div className="flex items-center gap-1 mt-2 text-green-400 text-xs">
+                  <ArrowUpRight size={12} />
+                  <span>{stat.change} from last month</span>
                 </div>
               </div>
-            ))}
+              <div className="p-3 rounded-xl" style={{ background: `${stat.color}20` }}>
+                <stat.icon size={22} color={stat.color} />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Charts Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Bar Chart */}
+        <div className="bg-white/5 rounded-xl p-5 border border-white/10">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h3 className="text-white font-semibold">Financial Activity</h3>
+              <p className="text-gray-500 text-sm">Deposits vs Loans ({timeRange === 'week' ? 'Weekly' : 'Monthly'})</p>
+            </div>
+            <Activity size={18} className="text-gray-500" />
+          </div>
+          <div className="h-80">
+            <Bar data={timeRange === 'week' ? weeklyData : monthlyData} options={chartOptions} />
+          </div>
+        </div>
+
+        {/* Doughnut Chart */}
+        <div className="bg-white/5 rounded-xl p-5 border border-white/10">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h3 className="text-white font-semibold">Loan Portfolio</h3>
+              <p className="text-gray-500 text-sm">Distribution by status</p>
+            </div>
+            <PieIcon size={18} className="text-gray-500" />
+          </div>
+          <div className="h-80">
+            <Doughnut data={doughnutData} options={doughnutOptions} />
+          </div>
+          <div className="grid grid-cols-3 gap-3 mt-4">
+            <div className="text-center">
+              <div className="text-xl font-bold text-white">{doughnutData.datasets[0].data[0]}</div>
+              <div className="text-xs text-gray-500">Active</div>
+            </div>
+            <div className="text-center">
+              <div className="text-xl font-bold text-white">{doughnutData.datasets[0].data[1]}</div>
+              <div className="text-xs text-gray-500">Repaid</div>
+            </div>
+            <div className="text-center">
+              <div className="text-xl font-bold text-white">{doughnutData.datasets[0].data[2]}</div>
+              <div className="text-xs text-gray-500">Defaulted</div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* ── Savings Trend ── */}
-      <div className="rounded-2xl border border-white/10 p-5" style={{ background: 'rgba(255,255,255,0.03)' }}>
-        <div className="flex items-center justify-between mb-5">
+      {/* Savings Trend */}
+      <div className="bg-white/5 rounded-xl p-5 border border-white/10">
+        <div className="flex justify-between items-center mb-4">
           <div>
             <h3 className="text-white font-semibold">Savings Growth Trend</h3>
-            <p className="text-gray-500 text-xs mt-0.5">Total savings over the last 7 months</p>
+            <p className="text-gray-500 text-sm">Total savings over time</p>
           </div>
-          <div className="flex items-center gap-2 text-emerald-400 text-xs font-medium bg-emerald-400/10 border border-emerald-400/20 px-3 py-1 rounded-full">
-            <ArrowUpRight size={12} /> +18.4% overall
+          <div className="flex items-center gap-1 text-emerald-400 text-xs">
+            <ArrowUpRight size={12} /> +18.4%
           </div>
         </div>
-        <div style={{ height: 200 }}>
+        <div className="h-64">
           <Line data={trendData} options={lineOptions} />
         </div>
       </div>
 
-      {/* ── Activity feed + Quick actions ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Recent Transactions — 2/3 */}
-        <div className="lg:col-span-2 rounded-2xl border border-white/10 overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)' }}>
-          <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
-            <div>
-              <h3 className="text-white font-semibold">Recent Transactions</h3>
-              <p className="text-gray-500 text-xs mt-0.5">{txCount > 0 ? `${txCount} latest activities` : 'No transactions yet'}</p>
-            </div>
-            <div className="flex gap-2">
-              <button className="p-2 hover:bg-white/10 rounded-lg transition-all"><Download size={15} className="text-gray-400" /></button>
-              <button onClick={() => fetchData(true)} className="p-2 hover:bg-white/10 rounded-lg transition-all">
-                <RefreshCw size={15} className={`text-gray-400 ${refreshing ? 'animate-spin' : ''}`} />
-              </button>
-            </div>
+      {/* Recent Transactions */}
+      <div className="bg-white/5 rounded-xl border border-white/10 overflow-hidden">
+        <div className="px-6 py-4 border-b border-white/10 flex justify-between items-center">
+          <div>
+            <h3 className="text-white font-semibold">Recent Transactions</h3>
+            <p className="text-gray-500 text-sm">Latest financial activities</p>
           </div>
-
-          {txCount > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-white/5">
-                    <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Member</th>
-                    <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
-                    <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Amount</th>
-                    <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">When</th>
-                    <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dashboardData.recent_transactions.slice(0, 6).map((tx, i) => (
-                    <tr key={tx.id || i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-                            <span className="text-white text-xs font-bold">{tx.user_name?.charAt(0) || '?'}</span>
-                          </div>
-                          <span className="text-white text-sm font-medium">{tx.user_name || 'Unknown'}</span>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${tx.type === 'deposit' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'bg-blue-500/15 text-blue-400 border border-blue-500/20'}`}>
-                          {tx.type === 'deposit' ? 'Deposit' : 'Repayment'}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <span className={`font-bold text-sm ${tx.type === 'deposit' ? 'text-emerald-400' : 'text-blue-400'}`}>
-                          {tx.type === 'deposit' ? '+' : '-'}{tx.amount} {tx.currency || 'LRD'}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <span className="text-gray-400 text-xs">
-                          {tx.created_at ? formatDistanceToNow(new Date(tx.created_at), { addSuffix: true }) : '—'}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-400 text-xs border border-emerald-500/20">
-                          <CheckCircle size={10} /> Completed
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="py-16 text-center">
-              <Activity size={32} className="text-gray-600 mx-auto mb-3" />
-              <p className="text-gray-500 text-sm">No transactions yet.</p>
-              <p className="text-gray-600 text-xs mt-1">Make your first deposit to get started!</p>
-            </div>
-          )}
+          <div className="flex gap-2">
+            <button className="p-2 hover:bg-white/10 rounded-lg"><Download size={18} className="text-gray-400" /></button>
+            <button className="p-2 hover:bg-white/10 rounded-lg"><RefreshCw size={18} className="text-gray-400" /></button>
+          </div>
         </div>
-
-        {/* Quick actions — 1/3 */}
-        <div className="space-y-4">
-          <h3 className="text-white font-semibold text-sm uppercase tracking-wider">Quick Actions</h3>
-
-          {[
-            { title: 'Make a Deposit', sub: 'Add funds to group savings', icon: Plus, color: '#6366f1', bg: 'from-indigo-500/10 to-purple-500/10', border: 'border-indigo-500/20', action: 'Deposit now →' },
-            { title: 'Request a Loan', sub: 'Apply for group financing', icon: DollarSign, color: '#10b981', bg: 'from-emerald-500/10 to-green-500/10', border: 'border-emerald-500/20', action: 'Apply now →' },
-            { title: 'Generate Report', sub: 'Export group analytics', icon: Download, color: '#f59e0b', bg: 'from-amber-500/10 to-orange-500/10', border: 'border-amber-500/20', action: 'Export CSV →' },
-          ].map((item, i) => (
-            <button
-              key={i}
-              className={`w-full text-left bg-gradient-to-r ${item.bg} rounded-xl p-4 border ${item.border} hover:brightness-125 transition-all group`}
-            >
-              <div className="flex items-center gap-3 mb-2">
-                <div className="p-2 rounded-lg" style={{ background: `${item.color}20` }}>
-                  <item.icon size={16} color={item.color} />
-                </div>
-                <div>
-                  <p className="text-white text-sm font-semibold">{item.title}</p>
-                  <p className="text-gray-400 text-xs">{item.sub}</p>
-                </div>
-              </div>
-              <p className="text-xs font-medium group-hover:translate-x-1 transition-transform" style={{ color: item.color }}>
-                {item.action}
-              </p>
-            </button>
-          ))}
-
-          {/* System health card */}
-          <div className="rounded-xl border border-white/10 p-4" style={{ background: 'rgba(255,255,255,0.03)' }}>
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-white text-sm font-semibold">System Status</p>
-              <span className="flex items-center gap-1.5 text-xs text-emerald-400"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />Live</span>
-            </div>
-            {[
-              { label: 'API Server', status: 'Operational' },
-              { label: 'Database', status: 'Healthy' },
-              { label: 'Auth Service', status: 'Active' },
-            ].map((s, i) => (
-              <div key={i} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
-                <span className="text-gray-400 text-xs">{s.label}</span>
-                <span className="text-emerald-400 text-xs font-medium">{s.status}</span>
-              </div>
-            ))}
+        
+        {dashboardData?.recent_transactions?.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-white/5">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">User</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Type</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Amount</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Date</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {dashboardData.recent_transactions.slice(0, 5).map((tx) => (
+                  <tr key={tx.id} className="hover:bg-white/5 transition">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center">
+                          <span className="text-white text-sm">{tx.user_name?.charAt(0)}</span>
+                        </div>
+                        <span className="text-white text-sm">{tx.user_name}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                        tx.type === 'deposit' ? 'bg-green-500/20 text-green-400' : 'bg-blue-500/20 text-blue-400'
+                      }`}>
+                        {tx.type === 'deposit' ? 'Deposit' : 'Loan Repayment'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`font-semibold ${tx.type === 'deposit' ? 'text-green-400' : 'text-blue-400'}`}>
+                        {tx.type === 'deposit' ? '+' : '-'}{tx.amount} {tx.currency}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-gray-400 text-sm">
+                      {format(new Date(tx.created_at), 'MMM dd, h:mm a')}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/20 text-green-400 text-xs">
+                        <CheckCircle size={12} /> Completed
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
+        ) : (
+          <div className="p-12 text-center text-gray-500">No transactions yet. Make your first deposit!</div>
+        )}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 rounded-xl p-5 border border-white/10">
+          <h4 className="text-white font-semibold">Quick Deposit</h4>
+          <p className="text-gray-400 text-sm mt-1">Add funds to your savings</p>
+          <button className="mt-4 text-indigo-400 text-sm hover:text-indigo-300 transition">Make a deposit →</button>
+        </div>
+        <div className="bg-gradient-to-r from-green-500/10 to-emerald-500/10 rounded-xl p-5 border border-white/10">
+          <h4 className="text-white font-semibold">Request Loan</h4>
+          <p className="text-gray-400 text-sm mt-1">Get access to funds</p>
+          <button className="mt-4 text-green-400 text-sm hover:text-green-300 transition">Apply now →</button>
+        </div>
+        <div className="bg-gradient-to-r from-orange-500/10 to-amber-500/10 rounded-xl p-5 border border-white/10">
+          <h4 className="text-white font-semibold">Generate Report</h4>
+          <p className="text-gray-400 text-sm mt-1">Download analytics</p>
+          <button className="mt-4 text-orange-400 text-sm hover:text-orange-300 transition">Export CSV →</button>
         </div>
       </div>
     </div>
@@ -3423,9 +3094,7 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
-==========================================
-FILE: ./frontend/src/pages/GroupDetail.jsx
-==========================================
+=== FILE: frontend/src/pages/GroupDetail.jsx ===
 import React from 'react';
 
 const GroupDetail = () => {
@@ -3440,9 +3109,7 @@ const GroupDetail = () => {
 };
 
 export default GroupDetail;
-==========================================
-FILE: ./frontend/src/pages/Groups.jsx
-==========================================
+=== FILE: frontend/src/pages/Groups.jsx ===
 import React from 'react';
 
 const Groups = () => {
@@ -3457,9 +3124,7 @@ const Groups = () => {
 };
 
 export default Groups;
-==========================================
-FILE: ./frontend/src/pages/Loans.jsx
-==========================================
+=== FILE: frontend/src/pages/Loans.jsx ===
 import React from 'react';
 
 const Loans = () => {
@@ -3474,9 +3139,7 @@ const Loans = () => {
 };
 
 export default Loans;
-==========================================
-FILE: ./frontend/src/pages/Login.jsx
-==========================================
+=== FILE: frontend/src/pages/Login.jsx ===
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -3615,9 +3278,7 @@ const Login = () => {
 };
 
 export default Login;
-==========================================
-FILE: ./frontend/src/pages/Notifications.jsx
-==========================================
+=== FILE: frontend/src/pages/Notifications.jsx ===
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
@@ -3747,9 +3408,7 @@ const Notifications = () => {
 };
 
 export default Notifications;
-==========================================
-FILE: ./frontend/src/pages/Profile.jsx
-==========================================
+=== FILE: frontend/src/pages/Profile.jsx ===
 import React, { useState, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Camera, Save } from 'lucide-react';
@@ -3869,9 +3528,7 @@ const Profile = () => {
 };
 
 export default Profile;
-==========================================
-FILE: ./frontend/src/pages/Reports.jsx
-==========================================
+=== FILE: frontend/src/pages/Reports.jsx ===
 import React from 'react';
 
 const Reports = () => {
@@ -3886,9 +3543,7 @@ const Reports = () => {
 };
 
 export default Reports;
-==========================================
-FILE: ./frontend/src/pages/Transactions.jsx
-==========================================
+=== FILE: frontend/src/pages/Transactions.jsx ===
 import React from 'react';
 
 const Transactions = () => {
@@ -3903,9 +3558,56 @@ const Transactions = () => {
 };
 
 export default Transactions;
-==========================================
-FILE: ./frontend/tailwind.config.js
-==========================================
+=== FILE: frontend/src/TestPage.jsx ===
+import React from 'react';
+
+export default function TestPage() {
+  return (
+    <div style={{ 
+      minHeight: '100vh', 
+      background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)',
+      padding: '2rem'
+    }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        <div style={{
+          background: 'rgba(255,255,255,0.1)',
+          backdropFilter: 'blur(12px)',
+          borderRadius: '1rem',
+          padding: '2rem',
+          border: '1px solid rgba(255,255,255,0.2)'
+        }}>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', color: 'white', marginBottom: '1rem' }}>
+            VSLA Platform - Test Page ✅
+          </h1>
+          <p style={{ color: '#cbd5e1', marginBottom: '2rem' }}>
+            If you can see this with a purple gradient background and glass card, CSS is working!
+          </p>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
+            <div style={{ background: 'rgba(99,102,241,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>12</div>
+              <div style={{ color: '#cbd5e1', fontSize: '0.875rem' }}>Groups</div>
+            </div>
+            <div style={{ background: 'rgba(16,185,129,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>156</div>
+              <div style={{ color: '#cbd5e1', fontSize: '0.875rem' }}>Members</div>
+            </div>
+            <div style={{ background: 'rgba(139,92,246,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>$45K</div>
+              <div style={{ color: '#cbd5e1', fontSize: '0.875rem' }}>Savings</div>
+            </div>
+            <div style={{ background: 'rgba(245,158,11,0.2)', padding: '1rem', borderRadius: '0.5rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>94%</div>
+              <div style={{ color: '#cbd5e1', fontSize: '0.875rem' }}>Repayment</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+========== CONFIG FILES ==========
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
@@ -3933,9 +3635,6 @@ export default {
   plugins: [],
 }
 
-==========================================
-FILE: ./frontend/vite.config.js
-==========================================
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -3944,7 +3643,76 @@ export default defineConfig({
   plugins: [react()],
 })
 
-==========================================
-FILE: ./fullstack.txt
-==========================================
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "axios": "^1.13.6",
+    "chart.js": "^4.5.1",
+    "date-fns": "^4.1.0",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.7.0",
+    "react": "^19.2.4",
+    "react-chartjs-2": "^5.3.1",
+    "react-countup": "^6.5.3",
+    "react-dom": "^19.2.4",
+    "react-hot-toast": "^2.6.0",
+    "react-router-dom": "^7.13.2",
+    "react-select": "^5.10.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.4.16",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.4.0",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.4.1",
+    "vite": "^8.0.1"
+  }
+}
 
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "seed": "node seeds/seedData.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.x.x",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^2.x.x",
+    "cors": "^2.x.x",
+    "dotenv": "^16.x.x",
+    "express": "^4.22.1",
+    "jsonwebtoken": "^9.x.x",
+    "multer": "^2.1.1",
+    "sequelize": "^6.37.8",
+    "sqlite": "^5.x.x",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.x.x"
+  }
+}
